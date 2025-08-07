@@ -1,0 +1,5 @@
+paulstoffregen/OneWire@^2.3.5
+adafruit/Adafruit_VL53L0X@^1.2.4
+adafruit/RTClib@^1.12.4
+milesburton/DallasTemperature@^3.9.0
+sandeepmistry/LoRa@^0.7.0
