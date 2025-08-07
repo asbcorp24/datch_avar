@@ -95,9 +95,11 @@ void MqttTask(void* pv) {
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
+ 
 
+esp_log_level_set("*", ESP_LOG_DEBUG);
   ESP_WiFiManager wm;
+  wm.setDebugOutput(true);
   ESP_WMParameter p1("server", "MQTT server", "", 40);
   ESP_WMParameter p2("port",   "MQTT port",   "1883", 6);
   ESP_WMParameter p3("user",   "MQTT user",   "", 20);
