@@ -10,6 +10,8 @@
             "includePath": [
                 "c:/js/kitaydatch/kitay_kl/include",
                 "c:/js/kitaydatch/kitay_kl/src",
+                "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
+                "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Mecha_QMC5883L",
                 "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Adafruit HMC5883 Unified",
                 "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Adafruit Unified Sensor",
                 "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src",
@@ -240,7 +242,6 @@
                 "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Insights/src",
                 "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src",
                 "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/NetBIOS/src",
-                "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                 "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/RainMaker/src",
                 "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/SD/src",
                 "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/SD_MMC/src",
@@ -260,6 +261,8 @@
                 "path": [
                     "c:/js/kitaydatch/kitay_kl/include",
                     "c:/js/kitaydatch/kitay_kl/src",
+                    "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
+                    "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Mecha_QMC5883L",
                     "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Adafruit HMC5883 Unified",
                     "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Adafruit Unified Sensor",
                     "c:/js/kitaydatch/kitay_kl/.pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src",
@@ -490,7 +493,6 @@
                     "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Insights/src",
                     "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/LittleFS/src",
                     "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/NetBIOS/src",
-                    "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src",
                     "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/RainMaker/src",
                     "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/SD/src",
                     "C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/SD_MMC/src",
