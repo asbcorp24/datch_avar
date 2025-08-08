@@ -150,4 +150,8 @@
  .pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src/vl53l0x_types.h \
  .pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src/vl53l0x_platform.h \
  .pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src/vl53l0x_i2c_platform.h \
- .pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src/vl53l0x_platform_log.h
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit_VL53L0X/src/vl53l0x_platform_log.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ Unified\ Sensor/Adafruit_Sensor.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ HMC5883\ Unified/Adafruit_HMC5883_U.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src/Preferences.h

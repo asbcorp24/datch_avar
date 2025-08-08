@@ -1,142 +1,162 @@
-
+// src/main.cpp
 #include <Arduino.h>
 #include <SPI.h>
 #include <LoRa.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 #include <Wire.h>
 #include <RTClib.h>
-#include <WiFi.h>
-#include <ESP_WiFiManager.h>
-#include <PubSubClient.h>
+#include <Adafruit_VL53L0X.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_HMC5883_U.h>
+#include <esp_sleep.h>
 
-#define LORA_FREQ 868E6
-#define PIN_SCK   5
-#define PIN_MISO  19
-#define PIN_MOSI  27
-#define PIN_SS    18
-#define PIN_RST   14
-#define PIN_DIO0  26
+// === Настройки LoRa и пинов ===
+#define CLIENT_ID       CLIENT_ID      // уникальный ID из build_flags
+#define LORA_FREQ       868E6
+#define PIN_SCK         5
+#define PIN_MISO        19
+#define PIN_MOSI        27
+#define PIN_SS          18
+#define PIN_RST         14
+#define PIN_DIO0        26
 
-typedef struct {
-  char mqtt_server[40];
-  char mqtt_port[6];
-  char mqtt_user[20];
-  char mqtt_pass[20];
-  char base_topic[40];
-} Config;
+const uint8_t bendPins[5] = {32,33,34,35,36};  // аналоговые датчики изгиба
+#define TILT_PIN        15                     // цифровой KS0025 Tilt Sensor
+#define SHOCK_PIN       13                     // прерывающийся датчик удара
+#define ONEWIRE_BUS     25                     // DS18B20 шина
 
-Config cfg;
-WiFiClient espClient;
-PubSubClient mqtt(espClient);
+// === Объекты ===
+Adafruit_VL53L0X lox;
+Adafruit_HMC5883_Unified mag(12345);
+OneWire oneWire(ONEWIRE_BUS);
+DallasTemperature tempSensor(&oneWire);
 RTC_DS3231 rtc;
-QueueHandle_t q;
 
-typedef struct {
-  uint8_t id;
-  uint16_t absVal[12], delVal[12];
-  uint32_t ts;
-} Msg;
+// Память между глубокими снами для предыдущих значений (15 каналов)
+RTC_DATA_ATTR uint16_t prevBuf[15];
+RTC_DATA_ATTR bool hasPrev = false;
+volatile bool shock = false;
 
-void sendTime() {
-  uint32_t t = rtc.now().unixtime();
-  LoRa.beginPacket();
-  LoRa.write(0xFF);
-  LoRa.write(t >> 24);
-  LoRa.write(t >> 16);
-  LoRa.write(t >> 8);
-  LoRa.write(t);
-  LoRa.endPacket();
+// Обработчик прерывания от удара
+void IRAM_ATTR shockISR() {
+  shock = true;
 }
 
-void mqttReconnect() {
-  while (!mqtt.connected()) {
-    if (mqtt.connect("srv", cfg.mqtt_user, cfg.mqtt_pass)) {
-      // connected
-    } else {
-      vTaskDelay(5000 / portTICK_PERIOD_MS);
-    }
-  }
-}
-
-void LoRaTask(void* pv) {
-  Msg m;
-  while (1) {
-    int sz = LoRa.parsePacket();
-    if (sz >= (1 + 12*2 + 12*2 + 4)) {
-      m.id = LoRa.read();
-      for (int i = 0; i < 12; i++)
-        m.absVal[i] = (LoRa.read() << 8) | LoRa.read();
-      for (int i = 0; i < 12; i++)
-        m.delVal[i] = (LoRa.read() << 8) | LoRa.read();
-      m.ts = ((uint32_t)LoRa.read() << 24) |
-             ((uint32_t)LoRa.read() << 16) |
-             ((uint32_t)LoRa.read() << 8) |
-             LoRa.read();
-      xQueueSend(q, &m, 0);
-    }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-}
-
-void MqttTask(void* pv) {
-  Msg m;
-  char tpc[80], pl[64];
-  while (1) {
-    if (xQueueReceive(q, &m, portMAX_DELAY) == pdPASS) {
-      if (!mqtt.connected()) mqttReconnect();
-      mqtt.loop();
-      for (int i = 0; i < 12; i++) {
-        snprintf(tpc, sizeof(tpc), "%s/client%u/sensor%u", cfg.base_topic, m.id, i);
-        snprintf(pl, sizeof(pl), "abs:%u,del:%u,ts:%lu", m.absVal[i], m.delVal[i], m.ts);
-        mqtt.publish(tpc, pl);
-      }
-    }
-  }
+// Безопасное чтение датчиков изгиба
+uint16_t readBend(uint8_t pin) {
+  int v = analogRead(pin);
+  return (v < 5 || v > 4090) ? 0xFFFF : (uint16_t)v;
 }
 
 void setup() {
   Serial.begin(115200);
- 
+  while (!Serial);
 
-esp_log_level_set("*", ESP_LOG_DEBUG);
-  ESP_WiFiManager wm;
-  wm.setDebugOutput(true);
-  ESP_WMParameter p1("server", "MQTT server", "", 40);
-  ESP_WMParameter p2("port",   "MQTT port",   "1883", 6);
-  ESP_WMParameter p3("user",   "MQTT user",   "", 20);
-  ESP_WMParameter p4("pass",   "MQTT pass",   "", 20);
-  ESP_WMParameter p5("topic",  "Base topic",  "sensors", 40);
+  // RTC
+  if (!rtc.begin()) while (1) delay(10);
+  if (rtc.lostPower()) 
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
 
-  wm.addParameter(&p1);
-  wm.addParameter(&p2);
-  wm.addParameter(&p3);
-  wm.addParameter(&p4);
-  wm.addParameter(&p5);
+  // DS18B20
+  tempSensor.begin();
 
-  if (!wm.autoConnect("ConfigAP")) {
-    delay(1000);
-    ESP.restart();
-  }
+  // VL53L0X
+  if (!lox.begin()) { Serial.println("VL53L0X init failed"); while(1) delay(10); }
 
-  strncpy(cfg.mqtt_server, p1.getValue(), sizeof(cfg.mqtt_server));
-  strncpy(cfg.mqtt_port,   p2.getValue(), sizeof(cfg.mqtt_port));
-  strncpy(cfg.mqtt_user,   p3.getValue(), sizeof(cfg.mqtt_user));
-  strncpy(cfg.mqtt_pass,   p4.getValue(), sizeof(cfg.mqtt_pass));
-  strncpy(cfg.base_topic,  p5.getValue(), sizeof(cfg.base_topic));
+  // HMC5883L
+  if (!mag.begin()) { Serial.println("HMC5883L init failed"); while(1) delay(10); }
 
-  rtc.begin();
+  // Tilt Sensor (KS0025) как цифровой вход
+  pinMode(TILT_PIN, INPUT_PULLUP);  // подтяжка, LOW при замыкании
+  // Прерывание по удару
+  pinMode(SHOCK_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(SHOCK_PIN), shockISR, FALLING);
+
+  // LoRa
   SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI);
   LoRa.setPins(PIN_SS, PIN_RST, PIN_DIO0);
-  LoRa.begin(LORA_FREQ);
-  LoRa.receive();
+  if (!LoRa.begin(LORA_FREQ)) while (1) delay(10);
 
-  mqtt.setServer(cfg.mqtt_server, atoi(cfg.mqtt_port));
-  mqttReconnect();
-
-  q = xQueueCreate(20, sizeof(Msg));
-  xTaskCreate(LoRaTask, "LoRaTask", 4096, NULL, 2, NULL);
-  xTaskCreate(MqttTask, "MqttTask", 8192, NULL, 1, NULL);
+  // Deep sleep: таймер и внешний пин (удар или наклон)
+  esp_sleep_enable_timer_wakeup(SLEEP_INTERVAL_US);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)SHOCK_PIN, 0);
 }
 
 void loop() {
-  // Tasks handle everything
+  // Определяем причину пробуждения
+  auto cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0)       Serial.println("Wakeup: shock");
+  else if (cause == ESP_SLEEP_WAKEUP_TIMER) Serial.println("Wakeup: timer");
+
+  // Собираем данные
+  uint16_t buf[15], delta[15];
+  for (int i = 0; i < 5; i++) {
+    buf[i] = readBend(bendPins[i]);
+  }
+  for (int i = 0; i < 5; i++) {
+    VL53L0X_RangingMeasurementData_t m;
+    lox.rangingTest(&m, false);
+    buf[5+i] = (m.RangeStatus == 4) ? 0xFFFF : m.RangeMilliMeter;
+    delay(10);
+  }
+  tempSensor.requestTemperatures();
+  buf[10] = (uint16_t)(tempSensor.getTempCByIndex(0) * 100);
+  // Читаем Tilt Sensor: при наклоне/вибрации – LOW (замыкание) :contentReference[oaicite:1]{index=1}
+  buf[11] = (digitalRead(TILT_PIN) == LOW) ? 1 : 0;
+  // Магнитометр X, Y, Z
+  sensors_event_t ev;
+  mag.getEvent(&ev);
+  buf[12] = (uint16_t)ev.magnetic.x;
+  buf[13] = (uint16_t)ev.magnetic.y;
+  buf[14] = (uint16_t)ev.magnetic.z;
+
+  // Вычисляем дельты
+  for (int i = 0; i < 15; i++) {
+    if (!hasPrev || buf[i] == 0xFFFF || prevBuf[i] == 0xFFFF) {
+      delta[i] = 0xFFFF;
+    } else {
+      delta[i] = abs((int)buf[i] - (int)prevBuf[i]);
+    }
+  }
+  hasPrev = true;
+  memcpy(prevBuf, buf, sizeof(buf));
+
+  // Метка времени
+  uint32_t ts = rtc.now().unixtime();
+
+  // Отправка по LoRa: ID + 15×abs + 15×delta + timestamp
+  LoRa.beginPacket();
+    LoRa.write(CLIENT_ID);
+    for (int i = 0; i < 15; i++) {
+      LoRa.write((buf[i] >> 8) & 0xFF);
+      LoRa.write(buf[i] & 0xFF);
+    }
+    for (int i = 0; i < 15; i++) {
+      LoRa.write((delta[i] >> 8) & 0xFF);
+      LoRa.write(delta[i] & 0xFF);
+    }
+    LoRa.write((ts >> 24) & 0xFF);
+    LoRa.write((ts >> 16) & 0xFF);
+    LoRa.write((ts >> 8) & 0xFF);
+    LoRa.write(ts & 0xFF);
+  LoRa.endPacket();
+
+  // Небольшое окно приёма для синхронизации времени
+  LoRa.receive();
+  unsigned long t0 = millis();
+  while (millis() - t0 < 200) {
+    int sz = LoRa.parsePacket();
+    if (sz == 5 && LoRa.read() == 0xFF) {
+      uint32_t nts = 0;
+      for (int j = 0; j < 4; j++) {
+        nts = (nts << 8) | LoRa.read();
+      }
+      rtc.adjust(DateTime(nts));
+      break;
+    }
+  }
+
+  // Возврат в глубокий сон
+  esp_deep_sleep_start();
 }
