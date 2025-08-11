@@ -138,7 +138,6 @@
  .pio/libdeps/esp32doit-devkit-v1/LoRa/src/LoRa.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Wire/src/Wire.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/cores/esp32/esp32-hal.h \
- .pio/libdeps/esp32doit-devkit-v1/RTClib/src/RTClib.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFi.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/cores/esp32/Print.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/cores/esp32/IPv6Address.h \
@@ -199,22 +198,39 @@
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiUdp.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/cores/esp32/Udp.h \
  C:/Users/user/.platformio/packages/framework-arduinoespressif32/cores/esp32/cbuf.h \
- .pio/libdeps/esp32doit-devkit-v1/ESP_WifiManager/src/ESP_WiFiManager.h \
- .pio/libdeps/esp32doit-devkit-v1/ESP_WifiManager/src/ESP_WiFiManager.hpp \
- .pio/libdeps/esp32doit-devkit-v1/ESP_WifiManager/src/ESP_WiFiManager_Debug.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/WebServer.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/HTTP_Method.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/nghttp/port/include/http_parser.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/Uri.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/detail/RequestHandler.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/DNSServer/src/DNSServer.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/WiFi/src/WiFiUdp.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_wifi/include/esp_wifi.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_wifi/include/esp_wifi_types.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_wifi/include/esp_private/esp_wifi_private.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_wifi/include/esp_wifi_crypto_types.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_wifi/include/esp_private/wifi_os_adapter.h \
- C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/esp_wifi/include/esp_wifi_default.h \
- .pio/libdeps/esp32doit-devkit-v1/ESP_WifiManager/src/utils/TZ.h \
- .pio/libdeps/esp32doit-devkit-v1/ESP_WifiManager/src/ESP_WiFiManager-Impl.h \
- .pio/libdeps/esp32doit-devkit-v1/PubSubClient/src/PubSubClient.h
+ .pio/libdeps/esp32doit-devkit-v1/PubSubClient/src/PubSubClient.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/libraries/Preferences/src/Preferences.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ GFX\ Library/Adafruit_GFX.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ GFX\ Library/gfxfont.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ BusIO/Adafruit_I2CDevice.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ BusIO/Adafruit_SPIDevice.h \
+ .pio/libdeps/esp32doit-devkit-v1/Adafruit\ SSD1306/Adafruit_SSD1306.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/RtcDS1302.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/RtcUtility.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/RtcDateTime.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/RtcTimeZone.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/RtcLocaleEnUs.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/RtcLocaleEn.h \
+ .pio/libdeps/esp32doit-devkit-v1/RTC/src/ThreeWire.h \
+ lib/mongoose/mongoose.h lib/mongoose/mongoose_config.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/port/esp32/include/netdb.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/netdb.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/inet.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/sockets.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/newlib/platform_include/sys/poll.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/netif.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/pbuf.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/stats.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/mem.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/memp.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/priv/memp_std.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/priv/memp_priv.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/priv/mem_priv.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/lwip/lwip/src/include/lwip/errno.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/app_update/include/esp_ota_ops.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/bootloader_support/include/esp_image_format.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/bootloader_support/include/esp_flash_partitions.h \
+ C:/Users/user/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/bootloader_support/include/esp_app_format.h \
+ .pio/libdeps/esp32doit-devkit-v1/ArduinoJson/src/ArduinoJson.h \
+ .pio/libdeps/esp32doit-devkit-v1/ArduinoJson/src/ArduinoJson.hpp \
+ .pio/libdeps/esp32doit-devkit-v1/ArduinoJson/src/ArduinoJson/Configuration.hpp

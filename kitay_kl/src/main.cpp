@@ -6,10 +6,10 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Wire.h>
-#include <RTClib.h>
+#include <RtcDS1302.h>
 #include <Adafruit_VL53L0X.h>
 #include <Adafruit_Sensor.h>
-#include <MechaQMC5883L.h>     // MechaQMC5883L library
+#include <MechaQMC5883.h>     // MechaQMC5883L library
 //#include <Adafruit_HMC5883_U.h>
 #include <esp_sleep.h>
 #include <Preferences.h>  
@@ -39,10 +39,12 @@ const uint8_t bendPins[5] = {32, 37, 34, 35, 36};  // аналоговые да�
 // === Объекты датчиков ===
 Adafruit_VL53L0X lox       = Adafruit_VL53L0X();
 //Adafruit_HMC5883_Unified mag(12345);
-QMC5883LCompass compass;
+MechaQMC5883 qmc;
 OneWire oneWire(ONEWIRE_BUS);
-DallasTemperature tempSensor(&oneWire);
-RTC_DS3231 rtc;
+DallasTemperature tempSensor(&oneWire);   // ← ЭТОГО НЕ ХВАТАЛО
+ThreeWire myWire(4, 5, 17); // DAT=4, CLK=5, RST=17
+RtcDS1302<ThreeWire> rtc(myWire);
+
 Preferences prefs;
 // Память между deep-sleep циклами
 RTC_DATA_ATTR uint16_t prevBuf[15];
@@ -65,6 +67,8 @@ void setup() {
   Serial.setDebugOutput(true);
   while (!Serial) delay(1);
   DBG("Serial initialized at 115200 bps\n");
+  
+  // --- I2C ---
   Serial.println("=== I2C Debug Start ===");
   Wire.begin(21, 22);
   Wire.setClock(100000);
@@ -92,7 +96,20 @@ for (uint8_t addr = 1; addr < 127; addr++) {
 
   DBG("--- Starting full initialization ---\n");
 
-  // --- RTC DS3231 ---
+
+  // --- RTC
+  rtc.Begin();
+ 
+rtc.SetIsWriteProtected(false);
+if (!rtc.GetIsRunning()) {
+    Serial.println("RTC not running, setting compile time");
+    rtc.SetDateTime(RtcDateTime(__DATE__, __TIME__));
+
+}
+RtcDateTime now = rtc.GetDateTime();
+Serial.printf("%04u-%02u-%02u %02u:%02u:%02u\n",
+              now.Year(), now.Month(), now.Day(),
+              now.Hour(), now.Minute(), now.Second());
  /* if (!rtc.begin()) {
     DBG("ERROR: RTC.begin() failed\n");
     while (1) delay(10);
@@ -145,6 +162,14 @@ for (uint8_t addr = 1; addr < 127; addr++) {
   }
 */
  
+// --- QMC5883L magnetometer ---
+  // Если твой модуль виден, как 0x0D — адрес по умолчанию подходит.
+  // При другом адресе можно раскомментировать строку ниже.
+  // qmc.setAddress(0x0D);
+  qmc.init();
+  // Непрерывный режим, 50 Гц, диапазон ±2Г, oversampling 512
+  qmc.setMode(Mode_Continuous, ODR_50Hz, RNG_2G, OSR_512);
+  DBG("QMC5883L initialized (Mode=Continuous, ODR=50Hz, RNG=2G, OSR=512)\n");
 
   // --- Tilt Sensor (KS0025) ---
   pinMode(TILT_PIN, INPUT_PULLUP);
@@ -387,24 +412,23 @@ void loop() {
       (int)ev.magnetic.x, (int)ev.magnetic.y, (int)ev.magnetic.z,
       buf[12], buf[13], buf[14]);
 */
-compass.read();  // выполняет I2C-транзакцию к адресу 0x2C :contentReference[oaicite:3]{index=3}
-  int16_t mx = compass.getX();
-  int16_t my = compass.getY();
-  int16_t mz = compass.getZ();
-  buf[12] = (uint16_t)mx;
-  buf[13] = (uint16_t)my;
-  buf[14] = (uint16_t)mz;
-  DBG("Compass QMC5883L: X=%d, Y=%d, Z=%d -> buf[12..14]=%u,%u,%u\n",
-      mx, my, mz, buf[12], buf[13], buf[14]);
+ // 7) Чтение магнитометра QMC5883L (13–15) + азимут
+  int x, y, z;
+  if (qmc.read(&x, &y, &z) == 0) { // 0 — OK в этой либе
+    buf[12] = (uint16_t)x;
+    buf[13] = (uint16_t)y;
+    buf[14] = (uint16_t)z;
+    DBG("QMC5883L: X=%d, Y=%d, Z=%d -> buf[12..14]=%u,%u,%u\n",
+        x, y, z, buf[12], buf[13], buf[14]);
 
-
-int az = compass.getAzimuth();             // градусы 0–359 :contentReference[oaicite:6]{index=6}
-  byte bd = compass.getBearing(az);          // 0–15 (N, NNE, …) :contentReference[oaicite:7]{index=7}
-  char dir[3];
-  compass.getDirection(dir, az);             // {"N","NNE",…} :contentReference[oaicite:8]{index=8}
-  DBG("Azimuth=%d°, Bearing=%u (%c%c%c)\n",
-      az, bd, dir[0], dir[1], dir[2]);
-            
+    float az = qmc.azimuth(&x, &y);     // азимут в градусах (0–360)
+    DBG("QMC5883L azimuth: %.2f°\n", az);
+  } else {
+    // Если чтение не удалось — помечаем отсутствием
+    buf[12] = buf[13] = buf[14] = 0xFFFF;
+    DBG("QMC5883L read() failed, mark XYZ as 0xFFFF\n");
+  }
+        
   // 8) Вычисление дельт
   DBG("Calculating deltas:\n");
   for (int i = 0; i < 15; i++) {
@@ -421,8 +445,9 @@ int az = compass.getAzimuth();             // градусы 0–359 :contentRef
   DBG("Copied current buf[] to prevBuf[]\n");
 
   // 9) Метка времени
- uint32_t ts =13125431;// rtc.now().unixtime();
- // DBG("Current UNIX timestamp: %lu\n", ts);
+RtcDateTime now = rtc.GetDateTime();
+uint32_t ts = now.Unix32Time();           // вместо Epoch32Time()
+DBG("Current UNIX timestamp: %lu\n", ts);
 
   // 10) Формирование и отправка LoRa-пакета
   DBG("LoRa.beginPacket()\n");
@@ -468,7 +493,8 @@ int az = compass.getAzimuth();             // градусы 0–359 :contentRef
           newTs = (newTs << 8) | (uint8_t)b;
           DBG("    ts byte[%d] = 0x%02X\n", j, b);
         }
-        rtc.adjust(DateTime(newTs));
+       rtc.SetDateTime(RtcDateTime(newTs));
+DBG("DS1302 synced to %lu\n", newTs);
         DBG("RTC synced to %lu\n", newTs);
         break;
       } else {
