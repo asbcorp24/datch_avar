@@ -1,0 +1,87 @@
+// ====== LoRa Client (ESP32) ======
+#include <SPI.h>
+#include <LoRa.h>
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+#define LORA_SS    16
+#define LORA_RST   14
+#define LORA_DIO0  26
+    
+#define FREQ 433E6     // 433E6 для Ra-01; для 868-МГц модулей — 868E6
+
+
+uint16_t counter = 0;
+
+// утилита дампа регистров
+uint8_t rdReg(uint8_t r) {
+  digitalWrite(LORA_SS, LOW);
+  SPI.transfer(r & 0x7F);
+  uint8_t v = SPI.transfer(0x00);
+  digitalWrite(LORA_SS, HIGH);
+  return v;
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+
+  if (!LoRa.begin(FREQ)) {
+    Serial.println("LoRa begin failed — проверьте частоту/пины/питание/антенну");
+    while (1) delay(1000);
+  }
+
+  LoRa.setSyncWord(0xA5);
+  LoRa.enableCrc();
+LoRa.setTxPower(17, PA_OUTPUT_PA_BOOST_PIN);    // 0..14 dBm для RFO
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setSpreadingFactor(7);
+  LoRa.setCodingRate4(5);
+  LoRa.setPreambleLength(8);
+  LoRa.setTxPower(17);           // PA_BOOST: 2..20; под 433МГц обычно 14–17 ок
+  LoRa.setTimeout(20);
+
+  pinMode(LORA_SS, OUTPUT); digitalWrite(LORA_SS, HIGH);
+  uint8_t ver = rdReg(0x42);
+  uint8_t mc1 = rdReg(0x1D), mc2 = rdReg(0x1E), mc3 = rdReg(0x26), sw = rdReg(0x39);
+  uint8_t frfMsb=rdReg(0x06), frfMid=rdReg(0x07), frfLsb=rdReg(0x08);
+  Serial.printf("LoRa cfg [CLIENT]: RegVer=0x%02X 1D=0x%02X 1E=0x%02X 26=0x%02X SW=0x%02X FRF=%02X%02X%02X\n",
+                ver, mc1, mc2, mc3, sw, frfMsb, frfMid, frfLsb);
+
+  Serial.println("LoRa CLIENT ready");
+}
+
+void loop() {
+  // соберём простой тестовый кадр: "GW", 0x01, id, counter, ts
+  uint32_t ts = millis()/1000;
+  LoRa.beginPacket();
+  LoRa.write('G'); LoRa.write('W'); LoRa.write(0x01);
+  LoRa.write(CLIENT_ID);
+  LoRa.write((counter>>8)&0xFF); LoRa.write(counter&0xFF);
+  LoRa.write((ts>>24)&0xFF); LoRa.write((ts>>16)&0xFF); LoRa.write((ts>>8)&0xFF); LoRa.write(ts&0xFF);
+  LoRa.endPacket();
+  Serial.printf("[TX] sent id=%u cnt=%u ts=%lu\n", CLIENT_ID, counter, (unsigned long)ts);
+  counter++;
+
+  // ждём ACK (0xFF + 4 байта времени)
+  LoRa.receive();
+  unsigned long start = millis();
+  bool got = false;
+  while (millis() - start < 800) {
+    int sz = LoRa.parsePacket();
+    if (sz == 5 && LoRa.read() == 0xFF) {
+      uint32_t t = 0;
+      for (int i=0;i<4;i++) t = (t<<8) | (uint8_t)LoRa.read();
+      Serial.printf("[RX] ACK time=%lu\n", (unsigned long)t);
+      got = true; break;
+    } else if (sz > 0) {
+      while (LoRa.available()) LoRa.read(); // чужой пакет — игнор
+    }
+  }
+  if (!got) Serial.println("[RX] ACK timeout");
+
+  delay(1000);   // шлём раз в секунду
+}

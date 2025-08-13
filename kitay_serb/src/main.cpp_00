@@ -1,0 +1,89 @@
+// ====== LoRa Server (ESP32) ======
+#include <SPI.h>
+#include <LoRa.h>
+// общие пины для обоих скетчей
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+#define LORA_SS    16
+#define LORA_RST   14
+#define LORA_DIO0  26
+#define FREQ 433E6     // 433E6 для Ra-01 (SX1278). Для 868-МГц модулей — 868E6
+
+// --- утилита чтения регистра (для дампа конфигурации)
+uint8_t rdReg(uint8_t r) {
+  digitalWrite(LORA_SS, LOW);
+  SPI.transfer(r & 0x7F);
+  uint8_t v = SPI.transfer(0x00);
+  digitalWrite(LORA_SS, HIGH);
+  return v;
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+
+  // SPI + пины LoRa
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+
+  if (!LoRa.begin(FREQ)) {
+    Serial.println("LoRa begin failed — проверьте частоту/пины/питание/антенну");
+    while (1) delay(1000);
+  }
+LoRa.setTxPower(17, PA_OUTPUT_PA_BOOST_PIN);   // 0..14 dBm для RFO
+  // Радиопараметры — одинаковые на клиенте и на сервере
+  LoRa.setSyncWord(0xA5);            // приватный syncWord
+  LoRa.enableCrc();                  // включаем CRC
+//  LoRa.explicitHeaderMode();         // явный заголовок
+  LoRa.setSignalBandwidth(125E3);    // 125 кГц
+  LoRa.setSpreadingFactor(7);        // SF7
+  LoRa.setCodingRate4(5);            // CR 4/5
+  LoRa.setPreambleLength(8);
+  LoRa.setTimeout(20);
+
+  // дамп конфигурации SX127x (проверьте, что применилось)
+  pinMode(LORA_SS, OUTPUT); digitalWrite(LORA_SS, HIGH);
+  uint8_t ver = rdReg(0x42);
+  uint8_t mc1 = rdReg(0x1D), mc2 = rdReg(0x1E), mc3 = rdReg(0x26), sw = rdReg(0x39);
+  uint8_t frfMsb=rdReg(0x06), frfMid=rdReg(0x07), frfLsb=rdReg(0x08);
+  Serial.printf("LoRa cfg [SERVER]: RegVer=0x%02X 1D=0x%02X 1E=0x%02X 26=0x%02X SW=0x%02X FRF=%02X%02X%02X\n",
+                ver, mc1, mc2, mc3, sw, frfMsb, frfMid, frfLsb);
+
+  LoRa.receive();
+  Serial.println("LoRa SERVER ready");
+}
+
+void loop() {
+  int sz = LoRa.parsePacket();
+  if (sz > 0) {
+    int rssi = LoRa.packetRssi();
+    float snr = LoRa.packetSnr();
+
+    // читаем пакет в буфер
+    uint8_t buf[128];
+    int n = 0;
+    while (LoRa.available() && n < (int)sizeof(buf)) buf[n++] = LoRa.read();
+
+    // ожидаем наш формат: "GW", 0x01, clientId, counter(2B), ts(4B)
+    if (n >= 8 && buf[0]=='G' && buf[1]=='W' && buf[2]==0x01) {
+      uint8_t clientId = buf[3];
+      uint16_t counter = (buf[4]<<8) | buf[5];
+      uint32_t ts = (uint32_t)buf[6]<<24 | (uint32_t)buf[7]<<16 | (uint32_t)buf[8]<<8 | (uint32_t)buf[9];
+      Serial.printf("[RX] len=%d id=%u cnt=%u ts=%lu RSSI=%d SNR=%.1f\n", n, clientId, counter, (unsigned long)ts, rssi, snr);
+
+      // шлём ACK: 0xFF + unixtime(псевдо) 4B
+      uint32_t t = millis()/1000;
+      LoRa.idle();
+      LoRa.beginPacket();
+      LoRa.write(0xFF);
+      LoRa.write((t>>24)&0xFF); LoRa.write((t>>16)&0xFF); LoRa.write((t>>8)&0xFF); LoRa.write(t&0xFF);
+      LoRa.endPacket();
+      LoRa.receive();
+      Serial.printf("[TX] ACK time=%lu\n", (unsigned long)t);
+    } else {
+      Serial.printf("[RX] foreign packet len=%d RSSI=%d SNR=%.1f (first bytes: %02X %02X %02X)\n",
+                    n, rssi, snr, buf[0], buf[1], buf[2]);
+    }
+  }
+}

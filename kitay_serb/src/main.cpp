@@ -1,4 +1,19 @@
 // main.cpp — DS1302 + OLED + Mongoose (без WiFiManager)
+#ifndef LORA_DBG
+#define LORA_DBG 1           // 0=off, 1=on
+
+#endif
+#ifndef NUM_CH
+#define NUM_CH 15  
+static constexpr int LORA_PACKET_LEN = 1 + NUM_CH*2 + NUM_CH*2 + 4;  // 65 байт
+static_assert(LORA_PACKET_LEN == 65, "Ожидаем 15 каналов (65 байт)");               // теперь везде 15
+#endif
+#ifndef LORA_LOG_EVERY_OK
+#define LORA_LOG_EVERY_OK 5  // печатать каждый N-й успешный приём
+#endif
+
+#define LORA_PROMISC 0   // временный режим: печатать любой пакет HEX
+#define LORA_MAX 128
 #include <Arduino.h>
 #include <SPI.h>
 #include <LoRa.h>
@@ -17,7 +32,7 @@
 #include <string.h>
 
 // ===== LoRa pins & params =====
-#define LORA_FREQ 868E6
+#define LORA_FREQ 433E6
 #define PIN_SCK   18
 #define PIN_MISO  19
 #define PIN_MOSI  23
@@ -72,7 +87,7 @@ static void saveConfig() {
 // ===== LoRa → MQTT =====
 struct Msg {
   uint8_t  id;
-  uint16_t absVal[12], delVal[12];
+  uint16_t absVal[NUM_CH], delVal[NUM_CH];
   uint32_t ts;
 };
 
@@ -85,8 +100,8 @@ QueueHandle_t q;
 struct ClientState {
   bool     used = false;
   uint8_t  id   = 0;
-  uint16_t absVal[12]{};
-  uint16_t delVal[12]{};
+  uint16_t absVal[NUM_CH]{};
+  uint16_t delVal[NUM_CH]{};
   uint32_t ts   = 0;
   int      rssi = 0;
 };
@@ -175,7 +190,17 @@ static const char *HTML_SETTINGS_SUFFIX =
 "<label>Base topic<input name='base_topic' value='%s'/></label>"
 "<button type='submit'>Сохранить</button>"
 "</form></div></body></html>";
+struct LoraDbg {
+  volatile uint32_t total = 0, ok = 0, bad_len = 0, short_read = 0, flushed = 0;
+  volatile int      last_len = 0, last_rssi = 0;
+  volatile float    last_snr = 0;
+  volatile uint8_t  last_id = 0;
+  uint8_t           last_hdr[8] = {0};
+} gL;
 
+static inline uint16_t rd16BE(const uint8_t* b, size_t& i){
+  uint16_t v = ((uint16_t)b[i] << 8) | b[i+1]; i += 2; return v;
+}
 static void loadConfig() {
   prefs.begin("app", false);
   String s;
@@ -324,7 +349,21 @@ static void http_fn(mg_connection* c, int ev, void* ev_data) {
       mg_printf(c, "event: snapshot\ndata: %.*s\n\n", (int)n, out);
       return;
 
-    } else if (uri_is(hm, "/settings")) {
+    }
+    else if (uri_is(hm, "/api/lora_dbg")) {
+  StaticJsonDocument<256> d;
+  d["total"]=gL.total; d["ok"]=gL.ok; d["bad_len"]=gL.bad_len;
+  d["short"]=gL.short_read; d["flushed"]=gL.flushed;
+  d["last_len"]=gL.last_len; d["last_rssi"]=gL.last_rssi; d["last_snr"]=gL.last_snr;
+  char hh[24]; snprintf(hh,sizeof(hh),"%02X %02X %02X %02X %02X %02X %02X %02X",
+                        gL.last_hdr[0],gL.last_hdr[1],gL.last_hdr[2],gL.last_hdr[3],
+                        gL.last_hdr[4],gL.last_hdr[5],gL.last_hdr[6],gL.last_hdr[7]);
+  d["hdr"]=hh;
+  char out[256]; size_t n=serializeJson(d,out,sizeof(out));
+  mg_http_reply(c,200,"Content-Type: application/json\r\n","%.*s",(int)n,out);
+}
+    
+    else if (uri_is(hm, "/settings")) {
       if (method_is(hm, "POST")) http_settings_post(c, hm);
       else                       http_settings_reply(c, false);
       return;
@@ -377,36 +416,148 @@ static void mqttEnsure() {
   }
 }
 
+static void sendTime() {
+  // если у тебя DS1302 Makuna:
+    RtcDateTime now = rtc.GetDateTime();
+   uint32_t t = now.Unix32Time();
+
+  // если RTC нет — можно взять системное (для теста):
+  //uint32_t t = (uint32_t)(millis()/1000);
+
+  LoRa.idle();
+  LoRa.beginPacket();
+  LoRa.write(0xFF);
+  LoRa.write((t >> 24) & 0xFF);
+  LoRa.write((t >> 16) & 0xFF);
+  LoRa.write((t >>  8) & 0xFF);
+  LoRa.write( t        & 0xFF);
+  LoRa.endPacket();
+  LoRa.receive();
+}
 // ===== Tasks =====
-static void LoRaTask(void*) {
-  Msg m; const int need = 1 + 12*2 + 12*2 + 4;
+/*static void LoRaTask(void*) {
+  const int NEED12 = 1 + 12*2 + 12*2 + 4;  // 53
+  const int NEED15 = 1 + 15*2 + 15*2 + 4;  // 65
+  uint8_t buf[80];
+
   for (;;) {
-    int sz = LoRa.parsePacket();
-    if (sz == need) {
-      m.id = LoRa.read();
-      for (int i=0;i<12;i++) m.absVal[i] = (LoRa.read()<<8) | LoRa.read();
-      for (int i=0;i<12;i++) m.delVal[i] = (LoRa.read()<<8) | LoRa.read();
-      m.ts = ((uint32_t)LoRa.read()<<24) | ((uint32_t)LoRa.read()<<16) | ((uint32_t)LoRa.read()<<8) | LoRa.read();
+    int sz = LoRa.parsePacket();            // >0: принят кадр (CRC прошёл)
+    if (sz > 0) {
+      gL.total++;
+      gL.last_len  = sz;
+      gL.last_rssi = LoRa.packetRssi();
+      gL.last_snr  = LoRa.packetSnr();
+
+      if (sz != NEED12 && sz != NEED15) {
+        size_t n = LoRa.readBytes(buf, (size_t)min(sz, (int)sizeof(buf)));
+        memcpy(gL.last_hdr, buf, min(n,(size_t)8));
+        while (LoRa.available()) { LoRa.read(); gL.flushed++; }
+        gL.bad_len++;
+        Serial.printf("[LoRa] bad len=%d rssi=%d snr=%.1f hdr=%02X %02X %02X %02X %02X %02X %02X %02X\n",
+          sz, gL.last_rssi, gL.last_snr,
+          gL.last_hdr[0],gL.last_hdr[1],gL.last_hdr[2],gL.last_hdr[3],
+          gL.last_hdr[4],gL.last_hdr[5],gL.last_hdr[6],gL.last_hdr[7]);
+        vTaskDelay(pdMS_TO_TICKS(5));
+        continue;
+      }
+
+      size_t n = LoRa.readBytes(buf, sz);
+      if ((int)n != sz) {
+        gL.short_read++;
+        while (LoRa.available()) { LoRa.read(); gL.flushed++; }
+        Serial.printf("[LoRa] short read need=%d got=%u\n", sz, (unsigned)n);
+        vTaskDelay(pdMS_TO_TICKS(5));
+        continue;
+      }
+
+      Msg m{}; size_t i=0;
+      m.id = buf[i++];
+
+      int N = (sz == NEED12) ? 12 : 15;
+      for (int k=0;k<N;k++) m.absVal[k] = rd16BE(buf,i);
+      for (int k=0;k<N;k++) m.delVal[k] = rd16BE(buf,i);
+      m.ts = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1] << 16) |
+             ((uint32_t)buf[i+2] << 8) | (uint32_t)buf[i+3];
+
+      gL.ok++; gL.last_id = m.id;
+
+      if (auto* c = upsertClient(m.id)) {
+        // сохраняем первые 12 каналов (если пришло 15 — 13..15 игнорим)
+        memcpy(c->absVal, m.absVal, 12*sizeof(uint16_t));
+        memcpy(c->delVal, m.delVal, 12*sizeof(uint16_t));
+        c->ts = m.ts; c->rssi = gL.last_rssi;
+      }
+
+      // SSE update
+      StaticJsonDocument<512> d;
+      d["id"]=m.id; d["ts"]=m.ts; d["rssi"]=gL.last_rssi; d["snr"]=gL.last_snr;
+      JsonArray a=d.createNestedArray("abs"); JsonArray dd=d.createNestedArray("del");
+      for (int k=0;k<12;k++) a.add(m.absVal[k]);
+      for (int k=0;k<12;k++) dd.add(m.delVal[k]);
+      char out[512]; size_t jsz = serializeJson(d, out, sizeof(out));
+      if (jsz < sizeof(out)) sse_broadcast(out);
+
+      // OLED + MQTT
+      g_pktCount++; g_lastId = m.id; g_lastRssi = gL.last_rssi;
+      xQueueSend(q, &m, 10 / portTICK_PERIOD_MS);
+
+      // сразу после приёма — маяк времени (клиент держит окно RX ~200 мс)
+      sendTime();
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+*/
+static void LoRaTask(void*) {
+  uint8_t buf[LORA_PACKET_LEN + 8];   // с запасом
+
+  for (;;) {
+    int sz = LoRa.parsePacket();            // >0 — есть кадр (CRC ок)
+    if (sz > 0) {
+      if (sz != LORA_PACKET_LEN) {
+        // чужой или старый формат — просто прочитаем/прогоним
+        size_t n = LoRa.readBytes(buf, (size_t)min(sz, (int)sizeof(buf)));
+        Serial.println('че то поймали но не наше');
+        // (опционально) логируй длину/первые байты
+        continue;
+      }
+
+      // читаем ровно 65 байт
+      size_t n = LoRa.readBytes(buf, LORA_PACKET_LEN);
+      if ((int)n != LORA_PACKET_LEN) continue;
+
+      Msg m{}; size_t i=0;
+      m.id = buf[i++];
+
+      for (int k=0;k<NUM_CH;k++) { m.absVal[k] = ((uint16_t)buf[i] << 8) | buf[i+1]; i+=2; }
+      for (int k=0;k<NUM_CH;k++) { m.delVal[k] = ((uint16_t)buf[i] << 8) | buf[i+1]; i+=2; }
+      m.ts = ((uint32_t)buf[i] << 24) | ((uint32_t)buf[i+1] << 16) |
+             ((uint32_t)buf[i+2] << 8) | (uint32_t)buf[i+3];
 
       if (auto* c = upsertClient(m.id)) {
         memcpy(c->absVal, m.absVal, sizeof(m.absVal));
         memcpy(c->delVal, m.delVal, sizeof(m.delVal));
         c->ts = m.ts; c->rssi = LoRa.packetRssi();
       }
-      StaticJsonDocument<512> d;
-      d["id"]=m.id; d["ts"]=m.ts; d["rssi"]=LoRa.packetRssi();
-      JsonArray a=d.createNestedArray("abs"); JsonArray dd=d.createNestedArray("del");
-      for (int i=0;i<12;i++) a.add(m.absVal[i]); for (int i=0;i<12;i++) dd.add(m.delVal[i]);
-      char out[512]; size_t n = serializeJson(d, out, sizeof(out));
-      if (n < sizeof(out)) sse_broadcast(out);
 
-      g_pktCount++; g_lastId = m.id; g_lastRssi = LoRa.packetRssi();   // для OLED
+      // SSE — готовим один снимок на 15 каналов
+      StaticJsonDocument<768> d;            // 512 может быть впритык — увеличил немного
+      d["id"]=m.id; d["ts"]=m.ts; d["rssi"]=LoRa.packetRssi(); d["snr"]=LoRa.packetSnr();
+      JsonArray a = d.createNestedArray("abs");
+      JsonArray dd= d.createNestedArray("del");
+      for (int k=0;k<NUM_CH;k++) a.add(m.absVal[k]);
+      for (int k=0;k<NUM_CH;k++) dd.add(m.delVal[k]);
+      char out[768]; size_t jsz = serializeJson(d, out, sizeof(out));
+      if (jsz < sizeof(out)) sse_broadcast(out);
 
+      // OLED/счётчики/очередь — как было
+      g_pktCount++; g_lastId = m.id; g_lastRssi = LoRa.packetRssi();
       xQueueSend(q, &m, 10 / portTICK_PERIOD_MS);
-    } else if (sz > 0) {
-      while (LoRa.available()) LoRa.read(); // flush
+
+      // (если используешь ACK временем) — оставь свой sendTime();
     }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 
@@ -529,10 +680,51 @@ if (!rtc.IsDateTimeValid()) {
 
 SPI.begin(PIN_SCK, PIN_MISO, PIN_MOSI);
   LoRa.setPins(PIN_SS, PIN_RST, PIN_DIO0);
+
+
+
+  auto loraReadReg = [&](uint8_t reg) {
+  digitalWrite(PIN_SS, LOW);
+  SPI.transfer(reg & 0x7F);
+  uint8_t v = SPI.transfer(0x00);
+  digitalWrite(PIN_SS, HIGH);
+  return v;
+};
+
+pinMode(PIN_SS, OUTPUT);
+digitalWrite(PIN_SS, HIGH);
+
+uint8_t ver = 0;
+digitalWrite(PIN_SS, LOW);
+SPI.transfer(0x42 & 0x7F);          // RegVersion
+ver = SPI.transfer(0x00);
+digitalWrite(PIN_SS, HIGH);
+Serial.printf("SX127x RegVersion=0x%02X (0x12/0x11 OK)\n", ver);
+
+
+
+
   if (!LoRa.begin(LORA_FREQ)) { Serial.println("LoRa begin failed"); ESP.restart(); }
-  LoRa.setSyncWord(0x34);
-  LoRa.enableCrc();
-  LoRa.receive();
+  
+LoRa.setSyncWord(0xA5);
+LoRa.enableCrc();
+ LoRa.setTxPower(17, PA_OUTPUT_PA_BOOST_PIN);
+LoRa.setSignalBandwidth(125E3);  // BW 125 кГц
+LoRa.setSpreadingFactor(7);      // SF7
+LoRa.setCodingRate4(5);          // CR 4/5
+LoRa.setTimeout(20);             // таймаут Stream.readBytes, мс
+LoRa.receive();
+
+
+
+auto rd = [&](uint8_t r){ digitalWrite(PIN_SS,LOW); SPI.transfer(r&0x7F);
+                          uint8_t v=SPI.transfer(0); digitalWrite(PIN_SS,HIGH); return v; };
+uint8_t mc1=rd(0x1D), mc2=rd(0x1E), mc3=rd(0x26), sw=rd(0x39);
+uint8_t frfMsb=rd(0x06), frfMid=rd(0x07), frfLsb=rd(0x08);
+Serial.printf("LoRa cfg: 1D=0x%02X 1E=0x%02X 26=0x%02X SW=0x%02X FRF=%02X%02X%02X\n",
+              mc1, mc2, mc3, sw, frfMsb, frfMid, frfLsb);
+
+
   xTaskCreate(LoRaTask,     "LoRaTask",     4096, NULL, 2, NULL);
   Serial.println("Ready.");
 }

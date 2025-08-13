@@ -13,7 +13,7 @@
 //#include <Adafruit_HMC5883_U.h>
 #include <esp_sleep.h>
 #include <Preferences.h>  
-
+#define LORA_DIAG 1
 #define DEBUG 1
 #if DEBUG
   #define DBG(...)    Serial.printf(__VA_ARGS__)
@@ -22,7 +22,7 @@
 #endif
 // === LoRa параметры и пины ===
  uint8_t clientId;   
-#define LORA_FREQ       868E6
+#define LORA_FREQ       433E6
 #define PIN_SCK         18
 #define PIN_MISO        19
 #define PIN_MOSI        23
@@ -187,7 +187,20 @@ Serial.printf("%04u-%02u-%02u %02u:%02u:%02u\n",
     DBG("ERROR: LoRa.begin() at %.1f MHz failed\n", LORA_FREQ/1e6);
     while (1) delay(10);
   }
+LoRa.setSyncWord(0xA5);
+LoRa.enableCrc();
+//LoRa.explicitHeaderMode();      // для явного заголовка (по умолчанию и так explicit, но явно ок)
+LoRa.setSignalBandwidth(125E3); // чтобы точно совпасть
+LoRa.setSpreadingFactor(7);
+LoRa.setCodingRate4(5);
+LoRa.setTxPower(17,PA_OUTPUT_PA_BOOST_PIN); 
   DBG("LoRa initialized @ %.1f MHz\n", LORA_FREQ/1e6);
+auto rd = [&](uint8_t r){ digitalWrite(PIN_SS,LOW); SPI.transfer(r&0x7F);
+                          uint8_t v=SPI.transfer(0); digitalWrite(PIN_SS,HIGH); return v; };
+uint8_t mc1=rd(0x1D), mc2=rd(0x1E), mc3=rd(0x26), sw=rd(0x39);
+uint8_t frfMsb=rd(0x06), frfMid=rd(0x07), frfLsb=rd(0x08);
+Serial.printf("LoRa cfg: 1D=0x%02X 1E=0x%02X 26=0x%02X SW=0x%02X FRF=%02X%02X%02X\n",
+              mc1, mc2, mc3, sw, frfMsb, frfMid, frfLsb);
 
   // --- Deep Sleep configuration ---
   esp_sleep_enable_timer_wakeup(SLEEP_INTERVAL_US);
@@ -353,6 +366,8 @@ void loop() {
 }
 */
 void loop() {
+   static int tries = 0;
+  tries++;
   // 1) Причина пробуждения
   esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_EXT0) {
@@ -502,7 +517,7 @@ DBG("DS1302 synced to %lu\n", newTs);
       }
     }
   }
-
+ 
   // 12) Переход в глубокий сон
   DBG("Client: entering deep sleep now\n\n");
   esp_deep_sleep_start();
