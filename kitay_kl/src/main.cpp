@@ -463,7 +463,9 @@ void loop() {
 RtcDateTime now = rtc.GetDateTime();
 uint32_t ts = now.Unix32Time();           // вместо Epoch32Time()
 DBG("Current UNIX timestamp: %lu\n", ts);
-
+  unsigned long startTime = millis();
+  bool sentOK = false;
+  do {
   // 10) Формирование и отправка LoRa-пакета
   DBG("LoRa.beginPacket()\n");
   LoRa.beginPacket();
@@ -488,9 +490,18 @@ DBG("Current UNIX timestamp: %lu\n", ts);
     LoRa.write((ts >> 16) & 0xFF); DBG("    ts>>16 = 0x%02X\n", (ts>>16)&0xFF);
     LoRa.write((ts >> 8) & 0xFF);  DBG("    ts>>8  = 0x%02X\n", (ts>>8)&0xFF);
     LoRa.write(ts & 0xFF);         DBG("    ts&0xFF= 0x%02X\n", ts&0xFF);
-  LoRa.endPacket();
-  DBG("LoRa packet sent\n");
 
+  DBG("LoRa packet sent\n");
+int result = LoRa.endPacket(); // 1 = успех
+    if (result == 1) {
+      sentOK = true;
+      DBG("Packet sent successfully\n");
+    } else {
+      DBG("Send failed, retrying...\n");
+      delay(500); // задержка между попытками
+    }
+
+  } while (!sentOK && (millis() - startTime < 30000));
   // 11) Окно приёма для синхронизации RTC (200 мс)
   DBG("Entering receive mode for 200 ms to sync time\n");
   LoRa.receive();

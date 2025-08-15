@@ -50,7 +50,7 @@ static_assert(LORA_PACKET_LEN == 65, "Ожидаем 15 каналов (65 ба�
 #define I2C_SCL 22
 #define OLED_ADDR 0x3C
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
-
+static constexpr size_t SSE_MSG_MAX = 768;
 // ===== RTC DS1302 =====
 // Было: DS1302 rtc(DS1302_RST, DS1302_DAT, DS1302_CLK);
 ThreeWire ds1302_io(DS1302_DAT, DS1302_CLK, DS1302_RST);   // IO, SCLK, CE
@@ -66,6 +66,7 @@ struct AppConfig {
   char mqtt_user[20]  = "";
   char mqtt_pass[20]  = "";
   char base_topic[40] = "sensors";
+    char web_pass[32]   = "6392524035";   // <— НОВОЕ: пароль веб‑интерфейса (по умолчанию)
 } cfg;
 
 static inline void sstrlcpy(char* dst, const char* src, size_t n) {
@@ -81,6 +82,7 @@ static void saveConfig() {
   prefs.putString("mqtt_user",  cfg.mqtt_user);
   prefs.putString("mqtt_pass",  cfg.mqtt_pass);
   prefs.putString("base_topic", cfg.base_topic);
+  prefs.putString("web_pass",  cfg.web_pass);
   prefs.end();
 }
 
@@ -128,44 +130,166 @@ static const char *HTML_INDEX =
 "<!doctype html><html><head><meta charset='utf-8'/>"
 "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
 "<title>LoRa devices</title>"
-"<style>body{font-family:system-ui;background:#111;color:#eee;margin:16px}"
-"table{border-collapse:collapse;width:100%}th,td{border:1px solid #333;padding:6px}th{background:#222}"
-".small{color:#bbb;font-size:12px}a{color:#8ab4ff;text-decoration:none}</style></head><body>"
+"<style>"
+"body{font-family:system-ui;background:#111;color:#eee;margin:16px}"
+"table{border-collapse:collapse;width:100%}"
+"th,td{border:1px solid #333;padding:6px}"
+"th{background:#1b1b1b;position:sticky;top:0;z-index:1}"
+"thead .sub th{background:#222;font-weight:600}"
+"td.num{font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;text-align:right}"
+"td.num.negative{color:#ff6b6b}"
+"td.num.positive{color:#69db7c}"
+".small{color:#bbb;font-size:12px}"
+"a{color:#8ab4ff;text-decoration:none}"
+".card{max-width:980px;background:#161616;border:1px solid #333;border-radius:14px;padding:12px;margin:12px 0}"
+"input,button{padding:8px;border-radius:8px;border:1px solid #333;background:#222;color:#eee}"
+"button{background:#2d6cdf;border:0;cursor:pointer}"
+"label{display:block;margin:8px 0 4px}"
+".badge{display:inline-block;padding:2px 6px;border:1px solid #444;border-radius:6px;background:#222;font-size:12px}"
+".legend{display:flex;gap:12px;flex-wrap:wrap;margin:6px 0}"
+".st{white-space:nowrap}"
+"</style></head><body>"
 "<h2>Внешние устройства (LoRa) — <a href='/settings'>Настройки</a></h2>"
 "<div class='small'>IP: <span id='ip'></span> • Live: <span id='live'>подключение…</span></div>"
-"<table><thead><tr><th>ID</th><th>TS</th><th>RSSI</th>"
-"<th colspan='12'>ABS</th><th colspan='12'>DEL</th></tr></thead><tbody id='rows'></tbody></table>"
+"Пользователь: <span class='badge'>admin</span>"
+"<div class='card'>"
+"<h3>Время устройства</h3>"
+"<div style='display:flex;gap:12px;align-items:center;flex-wrap:wrap'>"
+"<div>Сейчас: <b id='rtc'>--:--:--</b></div>"
+"<button id='sync'>Синхронизировать с браузером</button>"
+"</div>"
+"<form id='rtcform' style='margin-top:10px'>"
+"<label>Установить вручную:</label>"
+"<input type='datetime-local' id='dt'/> "
+"<button type='submit'>Установить</button>"
+"</form>"
+"</div>"
+
+"<table>"
+"  <thead>"
+"    <tr>"
+"      <th rowspan='2' title='Идентификатор LoRa‑клиента'>ID</th>"
+"      <th rowspan='2' title='Время устройства (из поля ts пакета)'>Время клиента</th>"
+"      <th rowspan='2' title='Уровень принятого сигнала, dBm'>RSSI, dBm</th>"
+"<th rowspan='2' title='Температура, °C'>Темп., °C</th>"
+"<th rowspan='2' title='Факт вибрации/наклона за момент измерения'>Вибрация</th>"
+"<th rowspan='2' title='Магнитное поле, ось X (сырое)'>Mag X</th>"
+"<th rowspan='2' title='Магнитное поле, ось Y (сырое)'>Mag Y</th>"
+"<th rowspan='2' title='Магнитное поле, ось Z (сырое)'>Mag Z</th>"
+"      <th colspan='12' title='Абсолютные значения с датчиков клиента'>ABS (каналы 1–12)</th>"
+"      <th colspan='12' title='Приращения относительно предыдущего пакета'>DEL (каналы 1–12)</th>"
+"    </tr>"
+"    <tr class='sub'>"
+"      <th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th>"
+"      <th>7</th><th>8</th><th>9</th><th>10</th><th>11</th><th>12</th>"
+"      <th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th>"
+"      <th>7</th><th>8</th><th>9</th><th>10</th><th>11</th><th>12</th>"
+"    </tr>"
+"  </thead>"
+"  <tbody id='rows'></tbody>"
+"</table>"
+
+"<div class='legend small'>"
+"  <span class='badge' title='Абсолютные значения каналов'>ABS</span> – абсолютные значения;"
+"  <span class='badge' title='Приращения относительно предыдущего пакета'>DEL</span> – приращения;"
+"  <span class='badge'>Время клиента</span> – из поля <code>ts</code> LoRa‑пакета;"
+"  <span class='badge'>RSSI</span> – мощность сигнала (dBm)."
+"</div>"
+
 "<script>"
 "fetch('/api/ip').then(r=>r.json()).then(j=>{document.getElementById('ip').textContent=j.ip||''});"
-"const rows={};function row(c){let id=String(c.id),tr=rows[id];"
-"if(!tr){tr=document.createElement('tr');rows[id]=tr;document.getElementById('rows').appendChild(tr);}let h='';"
-"h+=`<td>${id}</td><td>${c.ts??''}</td><td>${c.rssi??''}</td>`;"
-"for(let i=0;i<12;i++)h+=`<td>${c.abs?.[i]??''}</td>`;for(let i=0;i<12;i++)h+=`<td>${c.del?.[i]??''}</td>`;"
-"tr.innerHTML=h;}"
-"async function snap(){const r=await fetch('/api/clients');const j=await r.json();(j.clients||[]).forEach(row);}snap();"
+
+"let curEpoch=null,timer=null;"
+"function z(n){return String(n).padStart(2,'0');}"
+"function fmt(t){const d=new Date(t*1000);return `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())} ${z(d.getDate())}.${z(d.getMonth()+1)}.${String(d.getFullYear()).slice(2)}`}"
+"function fmtTS(sec){if(sec==null||sec<=0) return ''; const d=new Date(sec*1000); return `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())} ${z(d.getDate())}.${z(d.getMonth()+1)}.${String(d.getFullYear()).slice(2)}`}"
+"function clsNum(v){if(typeof v!=='number')return'num'; if(v<0)return'num negative'; if(v>0)return'num positive'; return'num';}"
+"function startClock(){if(timer)clearInterval(timer);timer=setInterval(()=>{if(curEpoch!=null){curEpoch++;const el=document.getElementById('rtc');if(el)el.textContent=fmt(curEpoch);}},1000)}"
+"async function loadRtc(){try{const j=await (await fetch('/api/rtc')).json();curEpoch=j.epoch;const el=document.getElementById('rtc');if(el)el.textContent=fmt(curEpoch);startClock();}catch{}}"
+"loadRtc();"
+
+"document.getElementById('sync').onclick=async()=>{const now=Math.floor(Date.now()/1000);const body=new URLSearchParams();body.set('epoch',String(now));await fetch('/api/rtc',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});await loadRtc();};"
+"document.getElementById('rtcform').onsubmit=async(e)=>{e.preventDefault();const v=document.getElementById('dt').value;if(!v)return;const y=parseInt(v.slice(0,4),10),m=parseInt(v.slice(5,7),10),d=parseInt(v.slice(8,10),10),H=parseInt(v.slice(11,13)||'0',10),M=parseInt(v.slice(14,16)||'0',10),S=0;const body=new URLSearchParams();body.set('y',y);body.set('m',m);body.set('d',d);body.set('H',H);body.set('M',M);body.set('S',S);await fetch('/api/rtc',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});await loadRtc();};"
+
+"const rows={};"
+"function row(c){"
+"  const id=String(c.id);"
+"  let tr=rows[id];"
+"  if(!tr){tr=document.createElement('tr');rows[id]=tr;document.getElementById('rows').appendChild(tr);}"
+"  const A=Array.isArray(c.abs)?c.abs.slice(0,12):[];"
+"  const D=Array.isArray(c.del)?c.del.slice(0,12):[];"
+"  let h='';"
+"  h+=`<td class='st' title='ID клиента'>${id}</td>`;"
+"  h+=`<td class='st' title='ts=${c.ts??''}'>${fmtTS(c.ts)}</td>`;"
+"  h+=`<td class='num' title='RSSI dBm'>${(c.rssi??'')}</td>`;"
+// НОВОЕ: Температура (buf[10]), Вибрация (buf[11]), Магнитометр (buf[12..14])
+"  h+=`<td class='num' title='Температура, °C'>${fmtTemp(A[10])}</td>`;"  
+"  h+=`<td class='st'  title='Вибрация/наклон (1/0)'>${fmtVib(A[11])}</td>`;"  
+"  h+=`<td class='num' title='Mag X (сырое)'>${toSigned16(A[12])}</td>`;"  
+"  h+=`<td class='num' title='Mag Y (сырое)'>${toSigned16(A[13])}</td>`;"  
+"  h+=`<td class='num' title='Mag Z (сырое)'>${toSigned16(A[14])}</td>`;"  
+"  for(let i=0;i<12;i++) h+=`<td class='num' title='ABS ch${i+1}'>${A[i]??''}</td>`;"
+"  for(let i=0;i<12;i++){const v=D[i]; h+=`<td class='${clsNum(v)}' title='DEL ch${i+1}'>${(v??'')}</td>`;}"
+"  tr.innerHTML=h;"
+"}"
+
+"async function snap(){try{const r=await fetch('/api/clients');const j=await r.json();(j.clients||[]).forEach(row);}catch(e){console.warn(e);}}"
+"snap();"
+
 "const es=new EventSource('/events');const live=document.getElementById('live');"
-"es.onopen=()=>live.textContent='активно';es.onerror=()=>live.textContent='ошибка';"
+"es.onopen=()=>live.textContent='активно';"
+"es.onerror=()=>live.textContent='ошибка';"
 "es.addEventListener('snapshot',e=>{(JSON.parse(e.data).clients||[]).forEach(row)});"
 "es.addEventListener('update',e=>row(JSON.parse(e.data)));"
+"function toSigned16(v){"
+"  if (v == null) return '';"
+"  if (v === 65535) return '';  "
+"  return (v & 0x8000) ? (v - 0x10000) : v;"
+"}"
+"function fmtTemp(raw){"
+"  if (raw == null || raw === 65535) return '';"
+"  return (raw / 100).toFixed(2);"
+"}"
+"function fmtVib(raw){"
+"  if (raw == null || raw === 65535) return '';"
+"  return (raw ? 'да' : '—');"
+"}"
 "</script></body></html>";
 
 static const char *HTML_SETTINGS_PREFIX =
 "<!doctype html><html><head><meta charset='utf-8'/>"
 "<meta name='viewport' content='width=device-width,initial-scale=1'/>"
-"<title>Настройки</title>"
+"<title>Бизнес &amp;ДИНАМИКА — Настройки</title>"
 "<style>body{font-family:system-ui;background:#111;color:#eee;margin:16px}"
 "label{display:block;margin-top:10px}input,select{width:100%;padding:8px;margin-top:4px;background:#222;color:#eee;border:1px solid #333;border-radius:6px}"
 "button{margin-top:16px;padding:10px 16px;border:0;border-radius:10px;background:#2d6cdf;color:#fff;cursor:pointer}"
 ".card{max-width:640px;margin:0 auto;background:#161616;border:1px solid #333;border-radius:14px;padding:16px}"
 ".row{display:grid;grid-template-columns:1fr 1fr;gap:12px}"
 ".msg{background:#092;color:#cfc;padding:8px;border-radius:8px;margin-bottom:12px;display:%s}"
-"a{color:#8ab4ff;text-decoration:none}</style>"
+"a{color:#8ab4ff;text-decoration:none}"
+/* бренд‑стили */
+".brand{display:flex;align-items:center;gap:12px;margin:0 0 12px 0}"
+".brand .logo{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;"
+"background:linear-gradient(135deg,#39c,#6df);box-shadow:0 0 0 1px #2a2a2a inset}"
+".brand .logo svg{width:26px;height:26px}"
+".brand .title{font-weight:700;font-size:18px;letter-spacing:0.2px}"
+".brand .title .amp{opacity:.9;padding:0 4px}"
+"</style>"
 "</head><body><div class='card'>"
-"<h2>Настройки Wi-Fi и MQTT</h2>"
+/* --- ВСТАВЛЕН ЛОГОТИП --- */
+"<div class='brand'>"
+"  <span class='logo' aria-hidden='true'>"
+"    <svg viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>"
+"      <path d='M4 18L10 6l4 8 2-4 4 8' stroke='#fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>"
+"    </svg>"
+"  </span>"
+"  <div class='title'>Бизнес <span class='amp'>&amp;</span>ДИНАМИКА</div>"
+"</div>"
+"<h2>Настройки Wi‑Fi и MQTT</h2>"
 "<p><a href='/'>⟵ Вернуться к данным</a></p>"
 "<div class='msg'>Сохранено. Устройство перезагрузится…</div>"
 "<form method='POST' action='/settings'>"
-"<h3>Wi-Fi</h3>"
+"<h3>Wi‑Fi</h3>"
 "<label>SSID<input name='wifi_ssid' value='";
 static const char *HTML_SETTINGS_MID =
 "'/></label>"
@@ -187,6 +311,9 @@ static const char *HTML_SETTINGS_MID5 =
 "<label>Password<input type='password' name='mqtt_pass' value='";
 static const char *HTML_SETTINGS_SUFFIX =
 "'/></label></div>"
+"<h3>Web UI</h3>"
+"<label>Новый пароль для входа (admin)"
+"<input type='password' name='web_pass' placeholder='(оставьте пустым — без изменений)'/></label>"
 "<label>Base topic<input name='base_topic' value='%s'/></label>"
 "<button type='submit'>Сохранить</button>"
 "</form></div></body></html>";
@@ -211,7 +338,37 @@ static void loadConfig() {
   s = prefs.getString("mqtt_user",  "");       s.toCharArray(cfg.mqtt_user,  sizeof(cfg.mqtt_user));
   s = prefs.getString("mqtt_pass",  "");       s.toCharArray(cfg.mqtt_pass,  sizeof(cfg.mqtt_pass));
   s = prefs.getString("base_topic", "sensors");s.toCharArray(cfg.base_topic, sizeof(cfg.base_topic));
+  s = prefs.getString("web_pass", "6392524035"); s.toCharArray(cfg.web_pass, sizeof(cfg.web_pass));
   prefs.end();
+}
+static bool http_check_basic_auth(struct mg_http_message* hm) {
+  const struct mg_str* h = mg_http_get_header(hm, "Authorization");
+  if (!h || h->len < 7) return false;
+
+  // Проверяем, что заголовок начинается с "Basic "
+  if (h->len < 6 || memcmp(h->buf, "Basic ", 6) != 0) return false;
+
+  // Декодируем base64-пару "user:pass"
+  char decoded[128];
+  int n = mg_base64_decode((const char*)h->buf + 6, (int)h->len - 6,
+                           decoded, (int)sizeof(decoded));
+  if (n <= 0 || n >= (int)sizeof(decoded)) return false;
+  decoded[n] = 0;
+
+  // Ожидаем "admin:<пароль>"
+  char expect[96];
+  snprintf(expect, sizeof(expect), "admin:%s",
+           (cfg.web_pass[0] ? cfg.web_pass : "6392524035"));
+
+  return strcmp(decoded, expect) == 0;
+}
+static bool http_require_auth(mg_connection* c, mg_http_message* hm) {
+  if (http_check_basic_auth(hm)) return true;
+  mg_http_reply(c, 401,
+      "WWW-Authenticate: Basic realm=\"LoRaGW\"\r\n"
+      "Cache-Control: no-cache\r\n",
+      "Unauthorized");
+  return false;
 }
 static bool setupMqttServerFromCfg() {
   if (cfg.mqtt_server[0] == '\0') return false;
@@ -252,7 +409,13 @@ static void http_settings_post(mg_connection* c, mg_http_message* hm) {
   get("mqtt_user",  cfg.mqtt_user,  sizeof(cfg.mqtt_user));
   get("mqtt_pass",  cfg.mqtt_pass,  sizeof(cfg.mqtt_pass));
   get("base_topic", cfg.base_topic, sizeof(cfg.base_topic));
-
+int n = mg_http_get_var(&hm->body, "web_pass", v, sizeof(v));
+if (n > 0) {             // поле присутствует
+  v[n] = 0;
+  if (v[0] != 0) {       // и не пустое
+    sstrlcpy(cfg.web_pass, v, sizeof(cfg.web_pass));
+  }
+}
   saveConfig();
   http_settings_reply(c, true);
   xTaskCreate([](void*){ vTaskDelay(pdMS_TO_TICKS(1000)); ESP.restart(); },
@@ -301,11 +464,72 @@ static inline bool uri_is(struct mg_http_message* hm, const char* s) {
 static inline bool method_is(struct mg_http_message* hm, const char* s) {
   return mg_strcmp(hm->method, mg_str(s)) == 0;
 }
+// ---- RTC helpers (ISO / JSON) ----
+static void rtc_json_reply(mg_connection* c) {
+  RtcDateTime now = rtc.GetDateTime();
+  StaticJsonDocument<192> d;
+  d["epoch"] = now.Unix32Time();
+  // ISO 8601 без таймзоны, чтобы одинаково парсилось на фронте
+  char iso[32];
+  snprintf(iso, sizeof(iso), "%04u-%02u-%02uT%02u:%02u:%02u",
+           now.Year(), now.Month(), now.Day(),
+           now.Hour(), now.Minute(), now.Second());
+  d["iso"] = iso;
+  d["running"] = rtc.GetIsRunning();
+  d["valid"]   = rtc.IsDateTimeValid();
+  char out[256]; size_t n = serializeJson(d, out, sizeof(out));
+  mg_http_reply(c, 200, "Content-Type: application/json\r\nCache-Control: no-cache\r\n",
+                "%.*s", (int)n, out);
+}
 
+// body: epoch=<uint32>  ИЛИ  y,m,d,H,M,S как целые
+static void rtc_set_from_http(mg_connection* c, mg_http_message* hm) {
+  char v[32]; int n;
+    Serial.println("работаем со временм");
+  // 1) epoch приоритетнее
+  n = mg_http_get_var(&hm->body, "epoch", v, sizeof(v));
+  if (n > 0) {
+    v[n] = 0;
+    uint32_t ep = (uint32_t) strtoul(v, nullptr, 10);
+      rtc.SetIsWriteProtected(false);
+rtc.SetIsRunning(true);
+    rtc.SetDateTime(RtcDateTime(ep));
+    return rtc_json_reply(c);
+  }
+  // 2) компоненты даты/времени
+  auto geti = [&](const char* name, int def)->int{
+    int m = mg_http_get_var(&hm->body, name, v, sizeof(v));
+    if (m <= 0) return def; v[m]=0; return atoi(v);
+  };
+
+
+  int y = geti("y", -1), mo = geti("m", -1), d = geti("d", -1);
+  int H = geti("H", 0),   M  = geti("M", 0),  S = geti("S", 0);
+    
+  if (y>1999 && mo>=1 && mo<=12 && d>=1 && d<=31) {
+    rtc.SetIsWriteProtected(false);
+rtc.SetIsRunning(true);
+    rtc.SetDateTime(RtcDateTime((uint16_t)y, (uint8_t)mo, (uint8_t)d,
+                                (uint8_t)H, (uint8_t)M, (uint8_t)S));
+                                 Serial.print(y);  Serial.println(M);
+                                     char line[44];
+       RtcDateTime now = rtc.GetDateTime();
+snprintf(line, sizeof(line), " Е %02u:%02u:%02u %02u.%02u.%02u",
+         now.Hour(), now.Minute(), now.Second(),
+         now.Day(), now.Month(), now.Year() % 100);
+    Serial.println(line);
+    return rtc_json_reply(c);
+  }
+ 
+  mg_http_reply(c, 400, "Content-Type: text/plain\r\n", "bad params");
+}
 static void http_fn(mg_connection* c, int ev, void* ev_data) {
   if (ev == MG_EV_HTTP_MSG) {
     auto *hm = (mg_http_message*) ev_data;
-
+ bool is_public = uri_is(hm, "/api/ip");
+  if (!is_public) {
+    if (!http_require_auth(c, hm)) return;   // 401 и выходим
+  }
     if (uri_is(hm, "/")) {
       mg_http_reply(c, 200, "Content-Type: text/html\r\nCache-Control: no-cache\r\n", "%s", HTML_INDEX);
 
@@ -349,7 +573,13 @@ static void http_fn(mg_connection* c, int ev, void* ev_data) {
       mg_printf(c, "event: snapshot\ndata: %.*s\n\n", (int)n, out);
       return;
 
-    }
+    }else if (uri_is(hm, "/api/rtc") && method_is(hm, "GET")) {
+      rtc_json_reply(c);
+      return;
+
+    } else if (uri_is(hm, "/api/rtc") && method_is(hm, "POST")) {
+      rtc_set_from_http(c, hm);
+      return;}
     else if (uri_is(hm, "/api/lora_dbg")) {
   StaticJsonDocument<256> d;
   d["total"]=gL.total; d["ok"]=gL.ok; d["bad_len"]=gL.bad_len;
@@ -518,15 +748,18 @@ static void LoRaTask(void*) {
       if (sz != LORA_PACKET_LEN) {
         // чужой или старый формат — просто прочитаем/прогоним
         size_t n = LoRa.readBytes(buf, (size_t)min(sz, (int)sizeof(buf)));
-        Serial.println('че то поймали но не наше');
+        Serial.println("че то поймали но не наше");
         // (опционально) логируй длину/первые байты
         continue;
       }
 
       // читаем ровно 65 байт
       size_t n = LoRa.readBytes(buf, LORA_PACKET_LEN);
-      if ((int)n != LORA_PACKET_LEN) continue;
-
+      if ((int)n != LORA_PACKET_LEN) 
+      {
+         Serial.println("че то поймали НО РАЗМЕР НЕ СОВПАЛ");
+      continue;
+      }
       Msg m{}; size_t i=0;
       m.id = buf[i++];
 
@@ -554,7 +787,15 @@ static void LoRaTask(void*) {
       // OLED/счётчики/очередь — как было
       g_pktCount++; g_lastId = m.id; g_lastRssi = LoRa.packetRssi();
       xQueueSend(q, &m, 10 / portTICK_PERIOD_MS);
-
+       Serial.println("вот че поймали");
+       Serial.println(m.id);
+       RtcDateTime now = rtc.GetDateTime();
+       char line[24];
+snprintf(line, sizeof(line), "%02u:%02u:%02u %02u.%02u.%02u",
+         now.Hour(), now.Minute(), now.Second(),
+         now.Day(), now.Month(), now.Year() % 100);
+    Serial.println(line);
+ sendTime();
       // (если используешь ACK временем) — оставь свой sendTime();
     }
     vTaskDelay(pdMS_TO_TICKS(5));
@@ -658,9 +899,28 @@ setupMqttServerFromCfg();
   // RTC DS1302
   rtc.Begin();
 if (!rtc.GetIsRunning()) rtc.SetIsRunning(true);
-if (!rtc.IsDateTimeValid()) {
+RtcDateTime now = rtc.GetDateTime();
+if (!rtc.IsDateTimeValid() || now.Year() < 2023) {
+    rtc.SetIsWriteProtected(false);
+rtc.SetIsRunning(true);
   rtc.SetDateTime(RtcDateTime(__DATE__, __TIME__));  // единоразово
 }
+now = rtc.GetDateTime();
+Serial.printf("RTC start: %04u-%02u-%02u %02u:%02u:%02u\n",
+              now.Year(), now.Month(), now.Day(), now.Hour(), now.Minute(), now.Second());
+
+
+              Serial.printf("WP=%d, running=%d\n", rtc.GetIsWriteProtected(), rtc.GetIsRunning());
+rtc.SetIsWriteProtected(false);
+rtc.SetIsRunning(true);
+
+// попробуем тик — установим сек=10, прочитаем
+RtcDateTime t0 = rtc.GetDateTime();
+RtcDateTime t1(t0.Year(), t0.Month(), t0.Day(), t0.Hour(), t0.Minute(), 10);
+rtc.SetDateTime(t1);
+delay(20);
+RtcDateTime t2 = rtc.GetDateTime();
+Serial.printf("tick test: %02u -> %02u\n", t1.Second(), t2.Second());
   // При необходимости — единоразово выставь время вручную и закомментируй:
   // rtc.time(Time(2025, 8, 11, 12, 0, 0)); // YYYY,MM,DD,hh,mm,ss
 
